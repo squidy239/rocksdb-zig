@@ -26,6 +26,7 @@ pub const DB = struct {
         dir: []const u8,
         db_options: DBOptions,
         maybe_column_families: ?[]const ColumnFamilyDescription,
+        for_read_only: bool,
         err_str: *?Data,
     ) (Allocator.Error || error{RocksDBOpen})!struct { Self, []const ColumnFamily } {
         const column_families = if (maybe_column_families) |cfs|
@@ -47,15 +48,30 @@ pub const DB = struct {
                 cf_options[i] = cf.options.convert();
             }
             var ch = CallHandler.init(err_str);
-            break :db try ch.handle(rdb.rocksdb_open_column_families(
-                db_options.convert(),
-                dir.ptr,
-                @intCast(cf_names.len),
-                @ptrCast(cf_names.ptr),
-                @ptrCast(cf_options.ptr),
-                @ptrCast(cf_handles.ptr),
-                @ptrCast(&ch.err_str_in),
-            ), error.RocksDBOpen);
+
+            const ret = if (for_read_only)
+                rdb.rocksdb_open_for_read_only_column_families(
+                    db_options.convert(),
+                    dir.ptr,
+                    @intCast(cf_names.len),
+                    @ptrCast(cf_names.ptr),
+                    @ptrCast(cf_options.ptr),
+                    @ptrCast(cf_handles.ptr),
+                    0,
+                    @ptrCast(&ch.err_str_in),
+                )
+            else
+                rdb.rocksdb_open_column_families(
+                    db_options.convert(),
+                    dir.ptr,
+                    @intCast(cf_names.len),
+                    @ptrCast(cf_names.ptr),
+                    @ptrCast(cf_options.ptr),
+                    @ptrCast(cf_handles.ptr),
+                    @ptrCast(&ch.err_str_in),
+                );
+
+            break :db try ch.handle(ret, error.RocksDBOpen);
         };
 
         // organize column family metadata
@@ -370,6 +386,7 @@ test "DB clean init and deinit" {
                     .create_missing_column_families = true,
                 },
                 null,
+                false,
                 &data,
             );
 
@@ -554,6 +571,7 @@ fn runTest(err_str: *?Data) !void {
                 .{ .name = "default" },
                 .{ .name = "another" },
             },
+            false,
             err_str,
         );
         defer db.deinit();
@@ -593,6 +611,7 @@ fn runTest(err_str: *?Data) !void {
             .{ .name = "default" },
             .{ .name = "another" },
         },
+        false,
         err_str,
     );
     defer db.deinit();
