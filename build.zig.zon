@@ -12,8 +12,18 @@
             .hash = "N-V-__8AADcwMwCa__yeHfNDwYl4KEDbkj-VwAqY844Nblr8",
             .lazy = true,
         },
+        .lz4 = .{
+            .url = "git+https://github.com/lz4/lz4#9da37b2eebf082bfab6e57c49be71cc41119a40d",
+            .hash = "N-V-__8AAG4IGgAvvtCxLZ9o8lPYxEpsFNCrWCw2A_K7DjPB",
+            .lazy = true,
+        },
+        .zstd = .{
+            .url = "git+https://github.com/facebook/zstd#48c0ed73625272cb7445183b5e256b5d0a130316", 
+            .hash = "N-V-__8AAEXAgQC_GPU9Jm4XJxw69q9l06q2xTCYxN-bAHYG",
+            .lazy = true,
+        },
     },
-    .minimum_zig_version = "0.15.0",
+    .minimum_zig_version = "0.16.0",
     .paths = .{
         "build.zig",
         "build.zig.zon",

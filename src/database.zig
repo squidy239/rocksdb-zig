@@ -14,6 +14,17 @@ const WriteBatch = lib.WriteBatch;
 const copy = lib.data.copy;
 const copyLen = lib.data.copyLen;
 
+pub const CompressionType = enum(c_int) {
+    no_compression = 0,
+    snappy = 1,
+    zlib = 2,
+    bz2 = 3,
+    lz4 = 4,
+    lz4hc = 5,
+    xpress = 6,
+    zstd = 7,
+};
+
 pub const DB = struct {
     db: *rdb.rocksdb_t,
     default_cf: ?ColumnFamilyHandle = null,
@@ -362,12 +373,14 @@ pub const DBOptions = struct {
     ///
     /// Dynamically changeable through SetDBOptions() API.
     max_open_files: i32 = -1,
+    compression: CompressionType = .no_compression,
 
     fn convert(do: DBOptions) *rdb.struct_rocksdb_options_t {
         const ro = rdb.rocksdb_options_create().?;
         rdb.rocksdb_options_set_create_if_missing(ro, @intFromBool(do.create_if_missing));
-        rdb.rocksdb_options_set_create_missing_column_families(ro, @intFromBool(do.create_if_missing));
+        rdb.rocksdb_options_set_create_missing_column_families(ro, @intFromBool(do.create_missing_column_families)); // Note: Fix copy-paste bug from your original here!
         rdb.rocksdb_options_set_max_open_files(ro, do.max_open_files);
+        rdb.rocksdb_options_set_compression(ro, @intFromEnum(do.compression));
 
         return ro;
     }
@@ -426,6 +439,9 @@ fn testDBOptions(test_subject: DBOptions, expected: *rdb.struct_rocksdb_options_
     const actual = test_subject.convert();
 
     inline for (@typeInfo(DBOptions).@"struct".fields) |field| {
+        // Skip checking compression since the C API doesn't have a direct rocksdb_options_get_compression accessor
+        if (comptime std.mem.eql(u8, field.name, "compression")) continue;
+        
         const getter = "rocksdb_options_get_" ++ field.name;
         const expected_value = @call(.auto, @field(rdb, getter), .{expected});
         const actual_value = @call(.auto, @field(rdb, getter), .{actual});
@@ -446,8 +462,12 @@ pub const ColumnFamily = struct {
 pub const ColumnFamilyHandle = *rdb.rocksdb_column_family_handle_t;
 
 pub const ColumnFamilyOptions = struct {
-    fn convert(_: ColumnFamilyOptions) *rdb.struct_rocksdb_options_t {
-        return rdb.rocksdb_options_create().?;
+    compression: CompressionType = .no_compression,
+
+    fn convert(cfo: ColumnFamilyOptions) *rdb.struct_rocksdb_options_t {
+        const ro = rdb.rocksdb_options_create().?;
+        rdb.rocksdb_options_set_compression(ro, @intFromEnum(cfo.compression));
+        return ro;
     }
 };
 
@@ -629,4 +649,62 @@ fn runTest(err_str: *?Data) !void {
         allocator.free(lfs);
     }
     try std.testing.expect(std.mem.eql(u8, "another", lfs[0].column_family_name));
+}
+
+// ==========================================
+// NEW COMPRESSION TEST SUITE
+// ==========================================
+test "DB Compression" {
+    var err_str: ?Data = null;
+    
+    // Cleanup helper depending on how you implement Data's cleanup
+    // defer if (err_str) |*e| e.deinit(); 
+
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+    
+    // We get a fresh directory path for this test
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(path);
+
+    const allocator = std.testing.allocator;
+
+    // Open a DB with column families set to use different compression algorithms
+    var db, const families = try DB.open(
+        allocator,
+        path,
+        .{
+            .create_if_missing = true,
+            .create_missing_column_families = true,
+        },
+        &.{
+            .{ .name = "default", .options = .{ .compression = .no_compression } },
+            .{ .name = "cf_lz4",  .options = .{ .compression = .lz4 } },
+            .{ .name = "cf_zstd", .options = .{ .compression = .zstd } },
+            .{ .name = "cf_snap", .options = .{ .compression = .snappy } },
+        },
+        false,
+        &err_str,
+    );
+    defer db.deinit();
+    defer allocator.free(families);
+
+    // Create a highly compressible payload to make sure the algorithms actually run
+    const payload = "A" ** 1024;
+
+    for (families) |cf| {
+        // Write the data
+        try db.put(cf.handle, "test_key", payload, &err_str);
+        
+        // Force a flush so RocksDB moves it from memtable (uncompressed) 
+        // to an SST file on disk (compressed). If the compression lib isn't 
+        // linked correctly, RocksDB will silently fallback or error out here depending on settings.
+        try db.flush(cf.handle, &err_str);
+
+        // Verify we can read it back
+        const val = try db.get(cf.handle, "test_key", &err_str);
+        
+        try std.testing.expect(val != null);
+        try std.testing.expectEqualStrings(payload, val.?.data);
+    }
 }

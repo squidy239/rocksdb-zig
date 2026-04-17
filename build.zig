@@ -13,8 +13,20 @@ pub fn build(b: *Build) !void {
         "Enables and builds with the Snappy compressor",
     ) orelse false;
 
+    const enable_lz4 = b.option(
+        bool,
+        "enable_lz4",
+        "Enables and builds with the LZ4 compressor",
+    ) orelse false;
+
+    const enable_zstd = b.option(
+        bool,
+        "enable_zstd",
+        "Enables and builds with the ZSTD compressor",
+    ) orelse false;
+
     // RocksDB's translate-c module
-    const rocksdb_mod = try addRocksDB(b, target, optimize, enable_snappy);
+    const rocksdb_mod = try addRocksDB(b, target, optimize, enable_snappy, enable_lz4, enable_zstd);
     const bindings_mod = b.addModule("bindings", .{
         .target = target,
         .optimize = optimize,
@@ -37,6 +49,8 @@ fn addRocksDB(
     target: ResolvedTarget,
     optimize: OptimizeMode,
     enable_snappy: bool,
+    enable_lz4: bool,
+    enable_zstd: bool,
 ) !*Build.Module {
     const rocks_dep = b.dependency("rocksdb", .{});
 
@@ -75,8 +89,28 @@ fn addRocksDB(
         }),
     }) else null;
 
+    const maybe_liblz4 = if (enable_lz4) b.addLibrary(.{
+        .name = "lz4",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .pic = if (force_pic == true) true else null,
+        }),
+    }) else null;
+
+    const maybe_libzstd = if (enable_zstd) b.addLibrary(.{
+        .name = "zstd",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .pic = if (force_pic == true) true else null,
+        }),
+    }) else null;
+
     // Only build the static library
-    try buildRocksDB(b, static_rocksdb, maybe_libsnappy, target);
+    try buildRocksDB(b, static_rocksdb, maybe_libsnappy, maybe_liblz4, maybe_libzstd, target);
 
     mod.addIncludePath(rocks_dep.path("include"));
     mod.linkLibrary(static_rocksdb);
@@ -89,6 +123,8 @@ fn buildRocksDB(
     b: *Build,
     librocksdb: *std.Build.Step.Compile,
     maybe_libsnappy: ?*std.Build.Step.Compile,
+    maybe_liblz4: ?*std.Build.Step.Compile,
+    maybe_libzstd: ?*std.Build.Step.Compile,
     target: std.Build.ResolvedTarget,
 ) !void {
     const t = target.result;
@@ -114,7 +150,10 @@ fn buildRocksDB(
             "-D_MBCS",
         });
     }
+    
     if (maybe_libsnappy != null) try rocksdb_flags.append(b.allocator, "-DSNAPPY=1");
+    if (maybe_liblz4 != null) try rocksdb_flags.append(b.allocator, "-DLZ4=1");
+    if (maybe_libzstd != null) try rocksdb_flags.append(b.allocator, "-DZSTD=1");
 
     librocksdb.root_module.addIncludePath(rocks_dep.path("include"));
     librocksdb.root_module.addIncludePath(rocks_dep.path("."));
@@ -460,10 +499,91 @@ fn buildRocksDB(
         },
         .flags = rocksdb_flags.items,
     });
+    // =========================================================================
 
-    if (maybe_libsnappy) |libsnappy| not_yet_fetched: {
+
+    // LZ4 Compilation
+    if (maybe_liblz4) |liblz4| not_yet_fetched_lz4: {
+        const lz4_dep = b.lazyDependency("lz4", .{}) orelse
+            break :not_yet_fetched_lz4;
+
+        librocksdb.root_module.linkLibrary(liblz4);
+        librocksdb.root_module.addIncludePath(lz4_dep.path("lib"));
+
+        liblz4.root_module.link_libc = true;
+
+        liblz4.root_module.addCSourceFiles(.{
+            .root = lz4_dep.path("lib"),
+            .files = &.{
+                "lz4.c",
+                "lz4hc.c",
+                "lz4frame.c",
+                "xxhash.c",
+            },
+            .flags = &.{},
+        });
+    }
+
+    // ZSTD Compilation
+    if (maybe_libzstd) |libzstd| not_yet_fetched_zstd: {
+            const zstd_dep = b.lazyDependency("zstd", .{}) orelse
+                break :not_yet_fetched_zstd;
+    
+            librocksdb.root_module.linkLibrary(libzstd);
+            librocksdb.root_module.addIncludePath(zstd_dep.path("lib"));
+    
+            libzstd.root_module.link_libc = true;
+    
+            libzstd.root_module.addCSourceFiles(.{
+                .root = zstd_dep.path("lib"),
+                .files = &.{
+                    // Common
+                    "common/debug.c",
+                    "common/entropy_common.c",
+                    "common/error_private.c",
+                    "common/fse_decompress.c",
+                    "common/pool.c",
+                    "common/threading.c",
+                    "common/xxhash.c",
+                    "common/zstd_common.c",
+                    // Compress
+                    "compress/fse_compress.c",
+                    "compress/hist.c",
+                    "compress/huf_compress.c",
+                    "compress/zstd_compress.c",
+                    "compress/zstd_compress_literals.c",
+                    "compress/zstd_compress_sequences.c",
+                    "compress/zstd_compress_superblock.c",
+                    "compress/zstd_double_fast.c",
+                    "compress/zstd_fast.c",
+                    "compress/zstd_lazy.c",
+                    "compress/zstd_ldm.c",
+                    "compress/zstd_opt.c",
+                    "compress/zstd_preSplit.c",
+                    "compress/zstdmt_compress.c",
+                    // Decompress
+                    "decompress/huf_decompress.c",
+                    "decompress/zstd_ddict.c",
+                    "decompress/zstd_decompress.c",
+                    "decompress/zstd_decompress_block.c",
+                    // DictBuilder (Required by RocksDB)
+                    "dictBuilder/cover.c",
+                    "dictBuilder/divsufsort.c",
+                    "dictBuilder/fastcover.c",
+                    "dictBuilder/zdict.c",
+                },
+                .flags = &.{ 
+                    "-O3", 
+                    // Force ZSTD to use C implementations instead of Assembly
+                    "-DZSTD_DISABLE_ASM=1", 
+                },
+            });
+        }
+
+    // Snappy Compilation
+    if (maybe_libsnappy) |libsnappy| not_yet_fetched_s: {
         const snappy_dep = b.lazyDependency("snappy", .{}) orelse
-            break :not_yet_fetched;
+            break :not_yet_fetched_s;
 
         librocksdb.root_module.linkLibrary(libsnappy);
         librocksdb.root_module.addIncludePath(snappy_dep.path("."));
@@ -488,7 +608,7 @@ fn buildRocksDB(
             .flags = &flags,
         });
 
-        const build_version = b.addConfigHeader(.{
+        const build_version_snappy = b.addConfigHeader(.{
             .style = .{ .cmake = snappy_dep.path("snappy-stubs-public.h.in") },
             .include_path = "snappy-stubs-public.h",
         }, .{
@@ -498,8 +618,8 @@ fn buildRocksDB(
             .HAVE_SYS_UIO_H_01 = 1,
         });
 
-        libsnappy.root_module.addIncludePath(build_version.getOutputDir());
-        librocksdb.root_module.addIncludePath(build_version.getOutputDir());
+        libsnappy.root_module.addIncludePath(build_version_snappy.getOutputDir());
+        librocksdb.root_module.addIncludePath(build_version_snappy.getOutputDir());
     }
 
     // platform dependent stuff
