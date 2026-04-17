@@ -22,7 +22,10 @@ pub fn build(b: *Build) !void {
     });
     bindings_mod.addImport("rocksdb", rocksdb_mod);
 
-    const tests = b.addTest(.{ .root_module = bindings_mod });
+    const tests = b.addTest(.{
+        .root_module = bindings_mod,
+        .use_lld = false,
+    });
     const test_step = b.step("test", "Run bindings tests");
     tests.root_module.addImport("rocksdb", rocksdb_mod);
     test_step.dependOn(&b.addRunArtifact(tests).step);
@@ -55,6 +58,7 @@ fn addRocksDB(
     const static_rocksdb = b.addLibrary(.{
         .name = "rocksdb",
         .linkage = .static,
+        .use_lld = false,
         .root_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
@@ -107,10 +111,19 @@ fn buildRocksDB(
     defer rocksdb_flags.deinit(b.allocator);
     try rocksdb_flags.appendSlice(b.allocator, &.{
         "-std=c++17",
-        "-faligned-new",
-        "-DHAVE_ALIGNED_NEW",
-        "-DROCKSDB_UBSAN_RUN",
     });
+    if (t.os.tag != .windows) {
+        try rocksdb_flags.appendSlice(b.allocator, &.{
+            "-faligned-new",
+            "-DHAVE_ALIGNED_NEW",
+            "-DROCKSDB_UBSAN_RUN",
+        });
+    } else {
+        try rocksdb_flags.appendSlice(b.allocator, &.{
+            "-DHAVE_ALIGNED_NEW",
+            "-D_MBCS",
+        });
+    }
     if (maybe_libsnappy != null) try rocksdb_flags.append(b.allocator, "-DSNAPPY=1");
 
     librocksdb.root_module.addIncludePath(rocks_dep.path("include"));
@@ -521,12 +534,31 @@ fn buildRocksDB(
             .flags = rocksdb_flags.items,
         });
     } else {
-        @panic("TODO: support windows!");
+        librocksdb.root_module.addCMacro("OS_WIN", "");
+        librocksdb.root_module.addCMacro("ROCKSDB_PLATFORM_WINDOWS", "");
+        librocksdb.root_module.addCMacro("NOMINMAX", "");
+        librocksdb.root_module.addCMacro("WIN32_LEAN_AND_MEAN", "");
+        librocksdb.root_module.addCMacro("ROCKSDB_WINDOWS_UTF8_FILENAMES", "");
+        librocksdb.root_module.addCSourceFiles(.{
+            .root = rocks_dep.path("."),
+            .files = &.{
+                "port/win/port_win.cc",
+                "port/win/env_win.cc",
+                "port/win/env_default.cc",
+                "port/win/win_logger.cc",
+                "port/win/win_thread.cc",
+                "port/win/io_win.cc",
+            },
+            .flags = rocksdb_flags.items,
+        });
+        librocksdb.root_module.linkSystemLibrary("shlwapi", .{});
+        librocksdb.root_module.linkSystemLibrary("rpcrt4", .{});
     }
 
     const os_name = switch (t.os.tag) {
         .macos => "OS_MACOSX",
         .linux => "OS_LINUX",
+        .windows => "OS_WIN",
         else => std.debug.panic("TODO: support target OS '{s}'", .{@tagName(t.os.tag)}),
     };
     librocksdb.root_module.addCMacro(os_name, "");
