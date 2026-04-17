@@ -3,7 +3,7 @@ const rdb = @import("rocksdb");
 const lib = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
-const RwLock = std.Thread.RwLock;
+const RwLock = std.Io.RwLock;
 
 const Data = lib.Data;
 const Iterator = lib.Iterator;
@@ -375,10 +375,10 @@ pub const DBOptions = struct {
 
 test "DB clean init and deinit" {
     const ns = struct {
-        pub fn run(allocator: Allocator) !void {
+        pub fn run(allocator: Allocator, io: std.Io) !void {
             var dir = std.testing.tmpDir(.{});
             defer dir.cleanup();
-            const path = try dir.dir.realpathAlloc(allocator, ".");
+            const path = try dir.dir.realPathFileAlloc(io, ".", allocator);
             defer allocator.free(path);
 
             var data: ?Data = null;
@@ -399,8 +399,8 @@ test "DB clean init and deinit" {
         }
     };
 
-    try ns.run(std.testing.allocator);
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, ns.run, .{});
+    try ns.run(std.testing.allocator, std.testing.io);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, ns.run, .{std.testing.io});
 }
 
 test "DBOptions defaults" {
@@ -521,8 +521,8 @@ const CfNameToHandleMap = struct {
         const self = try allocator.create(Self);
         self.* = .{
             .allocator = allocator,
-            .map = .{},
-            .lock = .{},
+            .map = .empty,
+            .lock = .init,
         };
         return self;
     }
