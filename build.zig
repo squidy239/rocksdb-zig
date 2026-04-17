@@ -24,7 +24,6 @@ pub fn build(b: *Build) !void {
 
     const tests = b.addTest(.{
         .root_module = bindings_mod,
-        .use_lld = false,
     });
     const test_step = b.step("test", "Run bindings tests");
     tests.root_module.addImport("rocksdb", rocksdb_mod);
@@ -55,19 +54,10 @@ fn addRocksDB(
     });
 
     const force_pic = b.option(bool, "force_pic", "Forces PIC enabled for the libraries");
+    
     const static_rocksdb = b.addLibrary(.{
         .name = "rocksdb",
         .linkage = .static,
-        .use_lld = false,
-        .root_module = b.createModule(.{
-            .target = target,
-            .optimize = optimize,
-            .pic = if (force_pic == true) true else null,
-        }),
-    });
-    const dynamic_rocksdb = b.addLibrary(.{
-        .name = "rocksdb_shared",
-        .linkage = .dynamic,
         .root_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
@@ -85,8 +75,8 @@ fn addRocksDB(
         }),
     }) else null;
 
+    // Only build the static library
     try buildRocksDB(b, static_rocksdb, maybe_libsnappy, target);
-    try buildRocksDB(b, dynamic_rocksdb, maybe_libsnappy, target);
 
     mod.addIncludePath(rocks_dep.path("include"));
     mod.linkLibrary(static_rocksdb);
@@ -94,7 +84,7 @@ fn addRocksDB(
     return mod;
 }
 
-/// The build process for rocksdb itself. works for static or shared library
+/// The build process for rocksdb itself.
 fn buildRocksDB(
     b: *Build,
     librocksdb: *std.Build.Step.Compile,
