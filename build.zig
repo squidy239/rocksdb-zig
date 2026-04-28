@@ -2,6 +2,7 @@ const std = @import("std");
 const Build = std.Build;
 const ResolvedTarget = Build.ResolvedTarget;
 const OptimizeMode = std.builtin.OptimizeMode;
+const builtin = @import("builtin");
 
 pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
@@ -138,6 +139,11 @@ fn buildRocksDB(
     try rocksdb_flags.appendSlice(b.allocator, &.{
         "-std=c++17",
     });
+    
+    if (builtin.sanitize_thread) {
+        try rocksdb_flags.append(b.allocator, "-DROCKSDB_TSAN_RUN");
+    }
+    
     if (t.os.tag != .windows) {
         try rocksdb_flags.appendSlice(b.allocator, &.{
             "-faligned-new",
@@ -574,8 +580,8 @@ fn buildRocksDB(
                 },
                 .flags = &.{ 
                     "-O3", 
-                    // Force ZSTD to use C implementations instead of Assembly
                     "-DZSTD_DISABLE_ASM=1", 
+                    "-DZSTD_MULTITHREAD=1",
                 },
             });
         }
