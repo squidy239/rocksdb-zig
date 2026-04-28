@@ -657,8 +657,7 @@ fn runTest(err_str: *?Data) !void {
 test "DB Compression" {
     var err_str: ?Data = null;
     
-    // Cleanup helper depending on how you implement Data's cleanup
-    // defer if (err_str) |*e| e.deinit(); 
+    defer if (err_str) |*e| e.deinit(); 
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();

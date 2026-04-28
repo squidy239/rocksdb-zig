@@ -25,13 +25,20 @@ pub fn build(b: *Build) !void {
         "enable_zstd",
         "Enables and builds with the ZSTD compressor",
     ) orelse false;
+    
+    const sanitize_thread = b.option(
+        bool,
+        "sanitize_thread",
+        "Enables thread sanitizer",
+    ) orelse false;
 
     // RocksDB's translate-c module
-    const rocksdb_mod = try addRocksDB(b, target, optimize, enable_snappy, enable_lz4, enable_zstd);
+    const rocksdb_mod = try addRocksDB(b, target, optimize, enable_snappy, enable_lz4, enable_zstd, sanitize_thread);
     const bindings_mod = b.addModule("bindings", .{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/lib.zig"),
+        .sanitize_thread = sanitize_thread,
     });
     bindings_mod.addImport("rocksdb", rocksdb_mod);
 
@@ -52,6 +59,7 @@ fn addRocksDB(
     enable_snappy: bool,
     enable_lz4: bool,
     enable_zstd: bool,
+    sanitize_thread: bool,
 ) !*Build.Module {
     const rocks_dep = b.dependency("rocksdb", .{});
 
@@ -66,6 +74,7 @@ fn addRocksDB(
         .optimize = optimize,
         .link_libc = true,
         .link_libcpp = true,
+        .sanitize_thread = sanitize_thread,
     });
 
     const force_pic = b.option(bool, "force_pic", "Forces PIC enabled for the libraries");
@@ -76,6 +85,7 @@ fn addRocksDB(
         .root_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
+            .sanitize_thread = sanitize_thread,
             .pic = if (force_pic == true) true else null,
         }),
     });
@@ -86,6 +96,7 @@ fn addRocksDB(
         .root_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
+            .sanitize_thread = sanitize_thread,
             .pic = if (force_pic == true) true else null,
         }),
     }) else null;
@@ -96,6 +107,7 @@ fn addRocksDB(
         .root_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
+            .sanitize_thread = sanitize_thread,
             .pic = if (force_pic == true) true else null,
         }),
     }) else null;
@@ -106,12 +118,13 @@ fn addRocksDB(
         .root_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
+            .sanitize_thread = sanitize_thread,
             .pic = if (force_pic == true) true else null,
         }),
     }) else null;
 
     // Only build the static library
-    try buildRocksDB(b, static_rocksdb, maybe_libsnappy, maybe_liblz4, maybe_libzstd, target);
+    try buildRocksDB(b, static_rocksdb, maybe_libsnappy, maybe_liblz4, maybe_libzstd, target,  sanitize_thread);
 
     mod.addIncludePath(rocks_dep.path("include"));
     mod.linkLibrary(static_rocksdb);
@@ -127,10 +140,12 @@ fn buildRocksDB(
     maybe_liblz4: ?*std.Build.Step.Compile,
     maybe_libzstd: ?*std.Build.Step.Compile,
     target: std.Build.ResolvedTarget,
+    sanitize_thread: bool,
 ) !void {
     const t = target.result;
     const rocks_dep = b.dependency("rocksdb", .{});
-
+    
+    librocksdb.root_module.sanitize_thread = sanitize_thread;
     librocksdb.root_module.link_libc = true;
     librocksdb.root_module.link_libcpp = true;
 
@@ -138,9 +153,11 @@ fn buildRocksDB(
     defer rocksdb_flags.deinit(b.allocator);
     try rocksdb_flags.appendSlice(b.allocator, &.{
         "-std=c++17",
+        "-DNDEBUG",
+        "-gdwarf-4",
     });
     
-    if (builtin.sanitize_thread) {
+    if (sanitize_thread) {
         try rocksdb_flags.append(b.allocator, "-DROCKSDB_TSAN_RUN");
     }
     
@@ -579,7 +596,6 @@ fn buildRocksDB(
                     "dictBuilder/zdict.c",
                 },
                 .flags = &.{ 
-                    "-O3", 
                     "-DZSTD_DISABLE_ASM=1", 
                     "-DZSTD_MULTITHREAD=1",
                 },
