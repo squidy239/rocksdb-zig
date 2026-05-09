@@ -1444,7 +1444,7 @@ test "DB Compression" {
     defer allocator.free(families);
 
     // Create a highly compressible payload to make sure the algorithms actually run
-    const payload = "A" ** 1024;
+    const payload: [1024]u8 = @splat('A');
 
     for (families) |cf| {
         // Write the data
