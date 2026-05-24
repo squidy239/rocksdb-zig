@@ -44,6 +44,9 @@ pub const DB = struct {
             defer allocator.free(cf_options);
             const cf_names = try allocator.alloc([*c]const u8, column_families.len);
             defer allocator.free(cf_names);
+            const db_opts = db_options.convert();
+            defer rdb.rocksdb_options_destroy(db_opts);
+            
             for (column_families, 0..) |cf, i| {
                 cf_names[i] = @ptrCast(cf.name.ptr);
                 cf_options[i] = cf.options.convert();
@@ -52,7 +55,7 @@ pub const DB = struct {
 
             const ret = if (for_read_only)
                 rdb.rocksdb_open_for_read_only_column_families(
-                    db_options.convert(),
+                    db_opts,
                     dir.ptr,
                     @intCast(cf_names.len),
                     @ptrCast(cf_names.ptr),
@@ -63,7 +66,7 @@ pub const DB = struct {
                 )
             else
                 rdb.rocksdb_open_column_families(
-                    db_options.convert(),
+                    db_opts,
                     dir.ptr,
                     @intCast(cf_names.len),
                     @ptrCast(cf_names.ptr),
@@ -122,6 +125,7 @@ pub const DB = struct {
         err_str: *?Data,
     ) !ColumnFamilyHandle {
         const options = rdb.rocksdb_options_create();
+        defer rdb.rocksdb_options_destroy(options);
         var ch = CallHandler.init(err_str);
         const handle = (try ch.handle(rdb.rocksdb_create_column_family(
             self.db,
@@ -1314,11 +1318,11 @@ const CfNameToHandleMap = struct {
 
     fn put(self: *Self, name: []const u8, handle: ColumnFamilyHandle) Allocator.Error!void {
         const owned_name = try self.allocator.dupe(u8, name);
-
+        errdefer self.allocator.free(owned_name);
         self.lock.lock();
         defer self.lock.unlock();
 
-        self.map.put(self.allocator, owned_name, handle);
+        try self.map.put(self.allocator, owned_name, handle);
     }
 
     fn get(self: *Self, name: []const u8) ?ColumnFamilyHandle {
@@ -1448,7 +1452,7 @@ test "DB Compression" {
 
     for (families) |cf| {
         // Write the data
-        try db.put(cf.handle, "test_key", payload, &err_str);
+        try db.put(cf.handle, "test_key", &payload, &err_str);
         
         // Force a flush so RocksDB moves it from memtable (uncompressed) 
         // to an SST file on disk (compressed). If the compression lib isn't 
@@ -1459,6 +1463,6 @@ test "DB Compression" {
         const val = try db.get(cf.handle, "test_key", &err_str);
         
         try std.testing.expect(val != null);
-        try std.testing.expectEqualStrings(payload, val.?.data);
+        try std.testing.expectEqualStrings(&payload, val.?.data);
     }
 }
