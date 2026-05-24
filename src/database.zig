@@ -49,7 +49,7 @@ pub const DB = struct {
             
             for (column_families, 0..) |cf, i| {
                 cf_names[i] = @ptrCast(cf.name.ptr);
-                cf_options[i] = cf.options.convert();
+                cf_options[i] = db_opts;
             }
             var ch = CallHandler.init(err_str);
 
@@ -635,6 +635,7 @@ test "DBOptions custom" {
 
 fn testDBOptions(test_subject: DBOptions, expected: *rdb.struct_rocksdb_options_t) !void {
     const actual = test_subject.convert();
+    defer rdb.rocksdb_options_destroy(actual);
 
     inline for (@typeInfo(DBOptions).@"struct".fields) |field| {
         // Skip checking compression since the C API doesn't have a direct rocksdb_options_get_compression accessor
