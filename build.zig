@@ -25,7 +25,7 @@ pub fn build(b: *Build) !void {
         "enable_zstd",
         "Enables and builds with the ZSTD compressor",
     ) orelse false;
-    
+
     const sanitize_thread = b.option(
         bool,
         "sanitize_thread",
@@ -78,7 +78,7 @@ fn addRocksDB(
     });
 
     const force_pic = b.option(bool, "force_pic", "Forces PIC enabled for the libraries");
-    
+
     const static_rocksdb = b.addLibrary(.{
         .name = "rocksdb",
         .linkage = .static,
@@ -87,6 +87,7 @@ fn addRocksDB(
             .optimize = optimize,
             .sanitize_thread = sanitize_thread,
             .pic = if (force_pic == true) true else null,
+            .sanitize_c = .off,
         }),
     });
 
@@ -124,7 +125,7 @@ fn addRocksDB(
     }) else null;
 
     // Only build the static library
-    try buildRocksDB(b, static_rocksdb, maybe_libsnappy, maybe_liblz4, maybe_libzstd, target,  sanitize_thread);
+    try buildRocksDB(b, optimize, static_rocksdb, maybe_libsnappy, maybe_liblz4, maybe_libzstd, target, sanitize_thread);
 
     mod.addIncludePath(rocks_dep.path("include"));
     mod.linkLibrary(static_rocksdb);
@@ -135,6 +136,7 @@ fn addRocksDB(
 /// The build process for rocksdb itself.
 fn buildRocksDB(
     b: *Build,
+    optimize: std.lang.OptimizeMode,
     librocksdb: *std.Build.Step.Compile,
     maybe_libsnappy: ?*std.Build.Step.Compile,
     maybe_liblz4: ?*std.Build.Step.Compile,
@@ -144,7 +146,7 @@ fn buildRocksDB(
 ) !void {
     const t = target.result;
     const rocks_dep = b.dependency("rocksdb", .{});
-    
+
     librocksdb.root_module.sanitize_thread = sanitize_thread;
     librocksdb.root_module.link_libc = true;
     librocksdb.root_module.link_libcpp = true;
@@ -152,28 +154,34 @@ fn buildRocksDB(
     var rocksdb_flags: std.ArrayListUnmanaged([]const u8) = .empty;
     defer rocksdb_flags.deinit(b.allocator);
     try rocksdb_flags.appendSlice(b.allocator, &.{
-        "-std=c++17",
-        "-DNDEBUG",
+        "-std=c++20",
         "-gdwarf-4",
+        "-DROCKSDB_IO_DISPATCHER=1",
+        "-DROCKSDB_ASYNC_IO=1",
+        "-D_REENTRANT",
+        "-DROCKSDB_SUPPORT_THREAD_LOCAL",
     });
-    
+
     if (sanitize_thread) {
         try rocksdb_flags.append(b.allocator, "-DROCKSDB_TSAN_RUN");
+        try rocksdb_flags.append(b.allocator, "-fsanitize=thread");        
     }
-    
+
     if (t.os.tag != .windows) {
         try rocksdb_flags.appendSlice(b.allocator, &.{
             "-faligned-new",
             "-DHAVE_ALIGNED_NEW",
-            "-DROCKSDB_UBSAN_RUN",
         });
+
+        if (optimize == .Debug) {
+            try rocksdb_flags.append(b.allocator, "-DROCKSDB_UBSAN_RUN");
+        }
     } else {
         try rocksdb_flags.appendSlice(b.allocator, &.{
             "-DHAVE_ALIGNED_NEW",
             "-D_MBCS",
         });
     }
-    
     if (maybe_libsnappy != null) try rocksdb_flags.append(b.allocator, "-DSNAPPY=1");
     if (maybe_liblz4 != null) try rocksdb_flags.append(b.allocator, "-DLZ4=1");
     if (maybe_libzstd != null) try rocksdb_flags.append(b.allocator, "-DZSTD=1");
@@ -183,7 +191,16 @@ fn buildRocksDB(
     librocksdb.root_module.addCSourceFiles(.{
         .root = rocks_dep.path("."),
         .files = &.{
+            "util/io_dispatcher_imp.cc",
+            "db/blob/blob_file_partition_manager.cc",
+            "db/blob/blob_write_batch_transformer.cc",
+            "db/multi_scan.cc",
+            "table/block_based/multi_scan_index_iterator.cc",
             "cache/cache.cc",
+            "db/wide/read_path_blob_resolver.cc",
+            "memtable/wbwi_memtable.cc",
+            "db/manifest_ops.cc",
+            "db/version_util.cc",
             "cache/cache_entry_roles.cc",
             "cache/cache_key.cc",
             "cache/cache_helpers.cc",
@@ -522,8 +539,6 @@ fn buildRocksDB(
         },
         .flags = rocksdb_flags.items,
     });
-    // =========================================================================
-
 
     // LZ4 Compilation
     if (maybe_liblz4) |liblz4| not_yet_fetched_lz4: {
@@ -549,58 +564,58 @@ fn buildRocksDB(
 
     // ZSTD Compilation
     if (maybe_libzstd) |libzstd| not_yet_fetched_zstd: {
-            const zstd_dep = b.lazyDependency("zstd", .{}) orelse
-                break :not_yet_fetched_zstd;
-    
-            librocksdb.root_module.linkLibrary(libzstd);
-            librocksdb.root_module.addIncludePath(zstd_dep.path("lib"));
-    
-            libzstd.root_module.link_libc = true;
-    
-            libzstd.root_module.addCSourceFiles(.{
-                .root = zstd_dep.path("lib"),
-                .files = &.{
-                    // Common
-                    "common/debug.c",
-                    "common/entropy_common.c",
-                    "common/error_private.c",
-                    "common/fse_decompress.c",
-                    "common/pool.c",
-                    "common/threading.c",
-                    "common/xxhash.c",
-                    "common/zstd_common.c",
-                    // Compress
-                    "compress/fse_compress.c",
-                    "compress/hist.c",
-                    "compress/huf_compress.c",
-                    "compress/zstd_compress.c",
-                    "compress/zstd_compress_literals.c",
-                    "compress/zstd_compress_sequences.c",
-                    "compress/zstd_compress_superblock.c",
-                    "compress/zstd_double_fast.c",
-                    "compress/zstd_fast.c",
-                    "compress/zstd_lazy.c",
-                    "compress/zstd_ldm.c",
-                    "compress/zstd_opt.c",
-                    "compress/zstd_preSplit.c",
-                    "compress/zstdmt_compress.c",
-                    // Decompress
-                    "decompress/huf_decompress.c",
-                    "decompress/zstd_ddict.c",
-                    "decompress/zstd_decompress.c",
-                    "decompress/zstd_decompress_block.c",
-                    // DictBuilder (Required by RocksDB)
-                    "dictBuilder/cover.c",
-                    "dictBuilder/divsufsort.c",
-                    "dictBuilder/fastcover.c",
-                    "dictBuilder/zdict.c",
-                },
-                .flags = &.{ 
-                    "-DZSTD_DISABLE_ASM=1", 
-                    "-DZSTD_MULTITHREAD=1",
-                },
-            });
-        }
+        const zstd_dep = b.lazyDependency("zstd", .{}) orelse
+            break :not_yet_fetched_zstd;
+
+        librocksdb.root_module.linkLibrary(libzstd);
+        librocksdb.root_module.addIncludePath(zstd_dep.path("lib"));
+
+        libzstd.root_module.link_libc = true;
+
+        libzstd.root_module.addCSourceFiles(.{
+            .root = zstd_dep.path("lib"),
+            .files = &.{
+                // Common
+                "common/debug.c",
+                "common/entropy_common.c",
+                "common/error_private.c",
+                "common/fse_decompress.c",
+                "common/pool.c",
+                "common/threading.c",
+                "common/xxhash.c",
+                "common/zstd_common.c",
+                // Compress
+                "compress/fse_compress.c",
+                "compress/hist.c",
+                "compress/huf_compress.c",
+                "compress/zstd_compress.c",
+                "compress/zstd_compress_literals.c",
+                "compress/zstd_compress_sequences.c",
+                "compress/zstd_compress_superblock.c",
+                "compress/zstd_double_fast.c",
+                "compress/zstd_fast.c",
+                "compress/zstd_lazy.c",
+                "compress/zstd_ldm.c",
+                "compress/zstd_opt.c",
+                "compress/zstd_preSplit.c",
+                "compress/zstdmt_compress.c",
+                // Decompress
+                "decompress/huf_decompress.c",
+                "decompress/zstd_ddict.c",
+                "decompress/zstd_decompress.c",
+                "decompress/zstd_decompress_block.c",
+                // DictBuilder (Required by RocksDB)
+                "dictBuilder/cover.c",
+                "dictBuilder/divsufsort.c",
+                "dictBuilder/fastcover.c",
+                "dictBuilder/zdict.c",
+            },
+            .flags = &.{
+                "-DZSTD_DISABLE_ASM=1",
+                "-DZSTD_MULTITHREAD=1",
+            },
+        });
+    }
 
     // Snappy Compilation
     if (maybe_libsnappy) |libsnappy| not_yet_fetched_s: {

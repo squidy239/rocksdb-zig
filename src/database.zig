@@ -1,6 +1,7 @@
 const std = @import("std");
 const rdb = @import("rocksdb");
 const lib = @import("lib.zig");
+const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
 const RwLock = std.Io.RwLock;
@@ -13,7 +14,6 @@ const WriteBatch = lib.WriteBatch;
 
 const copy = lib.data.copy;
 const copyLen = lib.data.copyLen;
-
 
 pub const DB = struct {
     db: *rdb.rocksdb_t,
@@ -46,7 +46,7 @@ pub const DB = struct {
             defer allocator.free(cf_names);
             const db_opts = db_options.convert();
             defer rdb.rocksdb_options_destroy(db_opts);
-            
+
             for (column_families, 0..) |cf, i| {
                 cf_names[i] = @ptrCast(cf.name.ptr);
                 cf_options[i] = db_opts;
@@ -385,7 +385,6 @@ pub const DBOptions = struct {
     /// Default: 0 (disabled, rocksdb picks based on write_buffer_size)
     db_write_buffer_size: usize = 0,
 
-
     /// If non-zero, the DB will write at most this many bytes before slowing
     /// down writes. Useful to avoid compaction IO spikes.
     /// Default: 0
@@ -406,8 +405,6 @@ pub const DBOptions = struct {
     // ------------------------------------------------------------------
     // WAL
     // ------------------------------------------------------------------
-
-
 
     /// Recovery mode on open after an unclean shutdown.
     /// Default: .point_in_time
@@ -439,7 +436,7 @@ pub const DBOptions = struct {
 
     /// Log level for info logs.
     /// Default: .info
-    info_log_level: InfoLogLevel = .info,
+    info_log_level: InfoLogLevel = if(builtin.mode == .Debug) .debug else .info,
 
     /// Maximum log file size. 0 = no limit.
     /// Default: 0
@@ -489,16 +486,10 @@ pub const DBOptions = struct {
     /// Default: false
     use_direct_io_for_flush_and_compaction: bool = false,
 
-    /// If true, allow ingestion of data that have been created by a newer
-    /// version of the DB. Used in some migration scenarios.
-    /// Default: false
-    skip_checking_sst_file_sizes_on_db_open: bool = false,
-
     /// If true, threads synchronizing with the write batch group leader will
     /// wait for up to write_thread_max_yield_usec before blocking on a mutex.
     /// Default: true
     enable_write_thread_adaptive_yield: bool = true,
-
 
     /// If true, allow concurrent memtable writes. Enabling this can
     /// improve write throughput for workloads with many parallel writers.
@@ -555,7 +546,6 @@ pub const DBOptions = struct {
         rdb.rocksdb_options_set_allow_mmap_writes(ro, @intFromBool(do.allow_mmap_writes));
         rdb.rocksdb_options_set_use_direct_reads(ro, @intFromBool(do.use_direct_reads));
         rdb.rocksdb_options_set_use_direct_io_for_flush_and_compaction(ro, @intFromBool(do.use_direct_io_for_flush_and_compaction));
-        rdb.rocksdb_options_set_skip_checking_sst_file_sizes_on_db_open(ro, @intFromBool(do.skip_checking_sst_file_sizes_on_db_open));
         rdb.rocksdb_options_set_enable_write_thread_adaptive_yield(ro, @intFromBool(do.enable_write_thread_adaptive_yield));
         rdb.rocksdb_options_set_allow_concurrent_memtable_write(ro, @intFromBool(do.allow_concurrent_memtable_write));
         rdb.rocksdb_options_set_avoid_unnecessary_blocking_io(ro, @intFromBool(do.avoid_unnecessary_blocking_io));
@@ -640,8 +630,9 @@ fn testDBOptions(test_subject: DBOptions, expected: *rdb.struct_rocksdb_options_
     inline for (@typeInfo(DBOptions).@"struct".fields) |field| {
         // Skip checking compression since the C API doesn't have a direct rocksdb_options_get_compression accessor
         if (comptime std.mem.eql(u8, field.name, "compression")) continue;
-        
+
         const getter = "rocksdb_options_get_" ++ field.name;
+        errdefer std.log.err("failed on {s}", .{getter});
         const expected_value = @call(.auto, @field(rdb, getter), .{expected});
         const actual_value = @call(.auto, @field(rdb, getter), .{actual});
         try std.testing.expectEqual(expected_value, actual_value);
@@ -814,7 +805,6 @@ pub const UniversalCompactionOptions = struct {
     /// Controls when to stop accumulating files into a compaction candidate
     /// set. Default: .total_size.
     stop_style: UniversalCompactionStopStyle = .total_size,
-
 };
 
 // ============================================================
@@ -1083,7 +1073,6 @@ pub const ColumnFamilyOptions = struct {
     /// in the block cache at all times. Default: true.
     pin_top_level_index_and_filter: bool = true,
 
-
     /// Checksum algorithm used to verify SST data blocks on read. A mismatch
     /// causes a `Corruption` error. Default: .crc32c.
     checksum: ChecksumType = .crc32c,
@@ -1105,13 +1094,10 @@ pub const ColumnFamilyOptions = struct {
     /// false-positives for exact-match lookups. Default: true.
     whole_key_filtering: bool = true,
 
-
-
     /// SST file format version. Newer versions may add features or change
     /// on-disk layout. Older RocksDB versions cannot read newer format
     /// versions. Default: 5.
     format_version: i32 = 5,
-
 
     // ------------------------------------------------------------------
     // Misc
@@ -1122,7 +1108,6 @@ pub const ColumnFamilyOptions = struct {
     /// a plain value. 0 = no limit (default). Setting a cap bounds the work
     /// done per read at the cost of more frequent full merges on write.
     max_successive_merges: usize = 0,
-
 
     // ------------------------------------------------------------------
     // convert() – builds a rocksdb_options_t*
@@ -1157,7 +1142,7 @@ pub const ColumnFamilyOptions = struct {
         rdb.rocksdb_options_set_max_bytes_for_level_base(ro, cfo.max_bytes_for_level_base);
         rdb.rocksdb_options_set_max_bytes_for_level_multiplier(ro, cfo.max_bytes_for_level_multiplier);
         if (cfo.max_bytes_for_level_multiplier_additional) |mba| {
-            rdb.rocksdb_options_set_max_bytes_for_level_multiplier_additional(ro, @constCast(@ptrCast(mba.ptr)), mba.len);
+            rdb.rocksdb_options_set_max_bytes_for_level_multiplier_additional(ro, @ptrCast(@constCast(mba.ptr)), mba.len);
         }
         rdb.rocksdb_options_set_target_file_size_base(ro, cfo.target_file_size_base);
         rdb.rocksdb_options_set_target_file_size_multiplier(ro, cfo.target_file_size_multiplier);
@@ -1416,12 +1401,12 @@ fn runTest(err_str: *?Data) !void {
 // ==========================================
 test "DB Compression" {
     var err_str: ?Data = null;
-    
-    defer if (err_str) |*e| e.deinit(); 
+
+    defer if (err_str) |*e| e.deinit();
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    
+
     // We get a fresh directory path for this test
     const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(path);
@@ -1438,7 +1423,7 @@ test "DB Compression" {
         },
         &.{
             .{ .name = "default", .options = .{ .compression = .no_compression } },
-            .{ .name = "cf_lz4",  .options = .{ .compression = .lz4 } },
+            .{ .name = "cf_lz4", .options = .{ .compression = .lz4 } },
             .{ .name = "cf_zstd", .options = .{ .compression = .zstd } },
             .{ .name = "cf_snap", .options = .{ .compression = .snappy } },
         },
@@ -1454,15 +1439,15 @@ test "DB Compression" {
     for (families) |cf| {
         // Write the data
         try db.put(cf.handle, "test_key", &payload, &err_str);
-        
-        // Force a flush so RocksDB moves it from memtable (uncompressed) 
-        // to an SST file on disk (compressed). If the compression lib isn't 
+
+        // Force a flush so RocksDB moves it from memtable (uncompressed)
+        // to an SST file on disk (compressed). If the compression lib isn't
         // linked correctly, RocksDB will silently fallback or error out here depending on settings.
         try db.flush(cf.handle, &err_str);
 
         // Verify we can read it back
         const val = try db.get(cf.handle, "test_key", &err_str);
-        
+
         try std.testing.expect(val != null);
         try std.testing.expectEqualStrings(&payload, val.?.data);
     }
