@@ -136,7 +136,7 @@ fn addRocksDB(
 /// The build process for rocksdb itself.
 fn buildRocksDB(
     b: *Build,
-    optimize: std.lang.OptimizeMode,
+    optimize: std.builtin.OptimizeMode,
     librocksdb: *std.Build.Step.Compile,
     maybe_libsnappy: ?*std.Build.Step.Compile,
     maybe_liblz4: ?*std.Build.Step.Compile,
