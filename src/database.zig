@@ -436,7 +436,7 @@ pub const DBOptions = struct {
 
     /// Log level for info logs.
     /// Default: .info
-    info_log_level: InfoLogLevel = if(builtin.mode == .Debug) .debug else .info,
+    info_log_level: InfoLogLevel = if (builtin.mode == .debug) .debug else .info,
 
     /// Maximum log file size. 0 = no limit.
     /// Default: 0
@@ -523,7 +523,7 @@ pub const DBOptions = struct {
         rdb.rocksdb_options_set_stats_persist_period_sec(ro, do.stats_persist_period_sec);
 
         // WAL
-        rdb.rocksdb_options_set_wal_recovery_mode(ro, @intFromEnum(do.wal_recovery_mode));
+        rdb.rocksdb_options_set_wal_recovery_mode(ro, @backingInt(do.wal_recovery_mode));
 
         // parallelism
         rdb.rocksdb_options_set_max_background_jobs(ro, do.max_background_jobs);
@@ -531,14 +531,14 @@ pub const DBOptions = struct {
         rdb.rocksdb_options_set_max_background_flushes(ro, do.max_background_flushes);
 
         // logging
-        rdb.rocksdb_options_set_info_log_level(ro, @intFromEnum(do.info_log_level));
+        rdb.rocksdb_options_set_info_log_level(ro, @backingInt(do.info_log_level));
         rdb.rocksdb_options_set_max_log_file_size(ro, do.max_log_file_size);
         rdb.rocksdb_options_set_log_file_time_to_roll(ro, do.log_file_time_to_roll);
         rdb.rocksdb_options_set_keep_log_file_num(ro, do.keep_log_file_num);
         rdb.rocksdb_options_set_recycle_log_file_num(ro, do.recycle_log_file_num);
 
         // compression
-        rdb.rocksdb_options_set_compression(ro, @intFromEnum(do.compression));
+        rdb.rocksdb_options_set_compression(ro, @backingInt(do.compression));
 
         // misc
         rdb.rocksdb_options_set_skip_stats_update_on_db_open(ro, @intFromBool(do.skip_stats_update_on_db_open));
@@ -627,11 +627,12 @@ fn testDBOptions(test_subject: DBOptions, expected: *rdb.struct_rocksdb_options_
     const actual = test_subject.convert();
     defer rdb.rocksdb_options_destroy(actual);
 
-    inline for (@typeInfo(DBOptions).@"struct".fields) |field| {
+    const info = @typeInfo(DBOptions).@"struct";
+    inline for (info.field_names) |name| {
         // Skip checking compression since the C API doesn't have a direct rocksdb_options_get_compression accessor
-        if (comptime std.mem.eql(u8, field.name, "compression")) continue;
+        if (comptime std.mem.eql(u8, name, "compression")) continue;
 
-        const getter = "rocksdb_options_get_" ++ field.name;
+        const getter = "rocksdb_options_get_" ++ name;
         errdefer std.log.err("failed on {s}", .{getter});
         const expected_value = @call(.auto, @field(rdb, getter), .{expected});
         const actual_value = @call(.auto, @field(rdb, getter), .{actual});
@@ -1116,8 +1117,8 @@ pub const ColumnFamilyOptions = struct {
         const ro = rdb.rocksdb_options_create().?;
 
         // ---- compression ----
-        rdb.rocksdb_options_set_compression(ro, @intFromEnum(cfo.compression));
-        rdb.rocksdb_options_set_bottommost_compression(ro, @intFromEnum(cfo.bottommost_compression));
+        rdb.rocksdb_options_set_compression(ro, @backingInt(cfo.compression));
+        rdb.rocksdb_options_set_bottommost_compression(ro, @backingInt(cfo.bottommost_compression));
         if (cfo.compression_per_level) |cpl| {
             rdb.rocksdb_options_set_compression_per_level(ro, @ptrCast(cpl.ptr), cpl.len);
         }
@@ -1151,7 +1152,7 @@ pub const ColumnFamilyOptions = struct {
         rdb.rocksdb_options_set_hard_pending_compaction_bytes_limit(ro, cfo.hard_pending_compaction_bytes_limit);
 
         // ---- compaction behaviour ----
-        rdb.rocksdb_options_set_compaction_style(ro, @intFromEnum(cfo.compaction_style));
+        rdb.rocksdb_options_set_compaction_style(ro, @backingInt(cfo.compaction_style));
         rdb.rocksdb_options_set_disable_auto_compactions(ro, @intFromBool(cfo.disable_auto_compactions));
         rdb.rocksdb_options_set_max_sequential_skip_in_iterations(ro, cfo.max_sequential_skip_in_iterations);
         rdb.rocksdb_options_set_report_bg_io_stats(ro, @intFromBool(cfo.report_bg_io_stats));
@@ -1179,7 +1180,7 @@ pub const ColumnFamilyOptions = struct {
             rdb.rocksdb_universal_compaction_options_set_max_merge_width(uo, cfo.universal.max_merge_width);
             rdb.rocksdb_universal_compaction_options_set_max_size_amplification_percent(uo, cfo.universal.max_size_amplification_percent);
             rdb.rocksdb_universal_compaction_options_set_compression_size_percent(uo, cfo.universal.compression_size_percent);
-            rdb.rocksdb_universal_compaction_options_set_stop_style(uo, @intFromEnum(cfo.universal.stop_style));
+            rdb.rocksdb_universal_compaction_options_set_stop_style(uo, @backingInt(cfo.universal.stop_style));
             rdb.rocksdb_options_set_universal_compaction_options(ro, uo);
         }
 
@@ -1202,7 +1203,7 @@ pub const ColumnFamilyOptions = struct {
             rdb.rocksdb_block_based_options_set_cache_index_and_filter_blocks_with_high_priority(bbo, @intFromBool(cfo.cache_index_and_filter_blocks_with_high_priority));
             rdb.rocksdb_block_based_options_set_pin_l0_filter_and_index_blocks_in_cache(bbo, @intFromBool(cfo.pin_l0_filter_and_index_blocks_in_cache));
             rdb.rocksdb_block_based_options_set_pin_top_level_index_and_filter(bbo, @intFromBool(cfo.pin_top_level_index_and_filter));
-            rdb.rocksdb_block_based_options_set_checksum(bbo, @intFromEnum(cfo.checksum));
+            rdb.rocksdb_block_based_options_set_checksum(bbo, @backingInt(cfo.checksum));
             rdb.rocksdb_block_based_options_set_no_block_cache(bbo, @intFromBool(cfo.no_block_cache));
             rdb.rocksdb_block_based_options_set_whole_key_filtering(bbo, @intFromBool(cfo.whole_key_filtering));
             rdb.rocksdb_block_based_options_set_format_version(bbo, cfo.format_version);

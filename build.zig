@@ -1,8 +1,9 @@
 const std = @import("std");
 const Build = std.Build;
 const ResolvedTarget = Build.ResolvedTarget;
-const OptimizeMode = std.builtin.OptimizeMode;
+const OptimizeMode = std.lang.Optimize;
 const builtin = @import("builtin");
+const Translator = @import("translate_c").Translator;
 
 pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
@@ -63,19 +64,15 @@ fn addRocksDB(
 ) !*Build.Module {
     const rocks_dep = b.dependency("rocksdb", .{});
 
-    const translate_c = b.addTranslateC(.{
-        .root_source_file = rocks_dep.path("include/rocksdb/c.h"),
+    const translator: Translator = .init(b.dependency("translate_c", .{}), .{
+        .c_source_file = rocks_dep.path("include/rocksdb/c.h"),
         .target = target,
         .optimize = optimize,
     });
-    const mod = b.addModule("rocksdb", .{
-        .root_source_file = translate_c.getOutput(),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .link_libcpp = true,
-        .sanitize_thread = sanitize_thread,
-    });
+    const mod = translator.mod;
+    mod.link_libcpp = true;
+    mod.sanitize_thread = sanitize_thread;
+    try b.modules.put(b.graph.arena, "rocksdb", mod);
 
     const force_pic = b.option(bool, "force_pic", "Forces PIC enabled for the libraries");
 
@@ -136,7 +133,7 @@ fn addRocksDB(
 /// The build process for rocksdb itself.
 fn buildRocksDB(
     b: *Build,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     librocksdb: *std.Build.Step.Compile,
     maybe_libsnappy: ?*std.Build.Step.Compile,
     maybe_liblz4: ?*std.Build.Step.Compile,
@@ -151,7 +148,7 @@ fn buildRocksDB(
     librocksdb.root_module.link_libc = true;
     librocksdb.root_module.link_libcpp = true;
 
-    var rocksdb_flags: std.ArrayListUnmanaged([]const u8) = .empty;
+    var rocksdb_flags: std.ArrayList([]const u8) = .empty;
     defer rocksdb_flags.deinit(b.allocator);
     try rocksdb_flags.appendSlice(b.allocator, &.{
         "-std=c++20",
@@ -164,7 +161,7 @@ fn buildRocksDB(
 
     if (sanitize_thread) {
         try rocksdb_flags.append(b.allocator, "-DROCKSDB_TSAN_RUN");
-        try rocksdb_flags.append(b.allocator, "-fsanitize=thread");        
+        try rocksdb_flags.append(b.allocator, "-fsanitize=thread");
     }
 
     if (t.os.tag != .windows) {
@@ -173,7 +170,7 @@ fn buildRocksDB(
             "-DHAVE_ALIGNED_NEW",
         });
 
-        if (optimize == .Debug) {
+        if (optimize == .debug) {
             try rocksdb_flags.append(b.allocator, "-DROCKSDB_UBSAN_RUN");
         }
     } else {
@@ -541,9 +538,8 @@ fn buildRocksDB(
     });
 
     // LZ4 Compilation
-    if (maybe_liblz4) |liblz4| not_yet_fetched_lz4: {
-        const lz4_dep = b.lazyDependency("lz4", .{}) orelse
-            break :not_yet_fetched_lz4;
+    if (maybe_liblz4) |liblz4| {
+        const lz4_dep = try b.dependencyLazy("lz4", .{});
 
         librocksdb.root_module.linkLibrary(liblz4);
         librocksdb.root_module.addIncludePath(lz4_dep.path("lib"));
@@ -563,9 +559,8 @@ fn buildRocksDB(
     }
 
     // ZSTD Compilation
-    if (maybe_libzstd) |libzstd| not_yet_fetched_zstd: {
-        const zstd_dep = b.lazyDependency("zstd", .{}) orelse
-            break :not_yet_fetched_zstd;
+    if (maybe_libzstd) |libzstd| {
+        const zstd_dep = try b.dependencyLazy("zstd", .{});
 
         librocksdb.root_module.linkLibrary(libzstd);
         librocksdb.root_module.addIncludePath(zstd_dep.path("lib"));
@@ -618,9 +613,8 @@ fn buildRocksDB(
     }
 
     // Snappy Compilation
-    if (maybe_libsnappy) |libsnappy| not_yet_fetched_s: {
-        const snappy_dep = b.lazyDependency("snappy", .{}) orelse
-            break :not_yet_fetched_s;
+    if (maybe_libsnappy) |libsnappy| {
+        const snappy_dep = try b.dependencyLazy("snappy", .{});
 
         librocksdb.root_module.linkLibrary(libsnappy);
         librocksdb.root_module.addIncludePath(snappy_dep.path("."));
